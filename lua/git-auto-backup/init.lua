@@ -425,4 +425,45 @@ function M.get_state()
   return vim.deepcopy(state)
 end
 
+function M.get_status_lines()
+  local lines = {}
+  table.insert(lines, "git-auto-backup: " .. (config.enabled and "enabled" or "disabled"))
+  table.insert(lines, "interval: " .. config.interval .. " min")
+  table.insert(lines, "pull: " .. tostring(config.pull))
+  table.insert(lines, "push: " .. tostring(config.push))
+  table.insert(lines, "dirs:")
+  for _, dir in ipairs(config.dirs) do
+    local last = state.last_sync[dir] or "never"
+    table.insert(lines, "  " .. dir .. " (last sync: " .. last .. ")")
+  end
+  return lines
+end
+
+function M.get_log_lines()
+  return vim.deepcopy(state.log_buffer)
+end
+
+function M.toggle()
+  config.enabled = not config.enabled
+  if config.enabled then
+    if not state.timer and #config.dirs > 0 then
+      state.timer = vim.uv.new_timer()
+      local interval_ms = config.interval * 60 * 1000
+      state.timer:start(interval_ms, interval_ms, vim.schedule_wrap(function()
+        M.run_cycle_async()
+      end))
+    end
+  else
+    if state.timer then
+      state.timer:stop()
+      state.timer:close()
+      state.timer = nil
+    end
+  end
+end
+
+function M.sync_now()
+  M.run_cycle_async()
+end
+
 return M
