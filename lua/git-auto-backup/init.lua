@@ -67,6 +67,88 @@ local function validate_dirs(dirs)
   return valid
 end
 
+local function git_sync(dir, cmd)
+  local full_cmd = "git -C " .. vim.fn.shellescape(dir) .. " " .. cmd
+  local output = vim.fn.system(full_cmd)
+  local exit_code = vim.v.shell_error
+  log(dir .. " $ " .. cmd .. " -> exit " .. exit_code)
+  if output and output ~= "" then
+    log(output)
+  end
+  return output, exit_code
+end
+
+local function make_commit_message()
+  return config.commit_prefix .. ": " .. os.date("%Y-%m-%dT%H:%M:%S%z")
+end
+
+-- Synchronous sync cycle (used by VimLeavePre and tests)
+-- When include_pull is true, runs full cycle (steps 1-7)
+-- When include_pull is false, runs exit cycle (steps 4-7)
+function M.sync_dir_sync(dir, include_pull)
+  if include_pull == nil then include_pull = false end
+
+  local did_stash = false
+
+  if include_pull and config.pull then
+    -- Check for uncommitted changes (including untracked)
+    local status_out, _ = git_sync(dir, "status --porcelain")
+    if status_out and status_out ~= "" then
+      -- Step 1: stash (including untracked files)
+      local _, stash_exit = git_sync(dir, "stash -u")
+      if stash_exit == 0 then
+        did_stash = true
+      end
+    end
+
+    -- Step 2: pull
+    local _, pull_exit = git_sync(dir, "pull --rebase")
+    if pull_exit ~= 0 then
+      notify_error("conflict in " .. dir .. " — check :GitAutoBackupLog")
+      if did_stash then
+        git_sync(dir, "stash pop")
+      end
+      return
+    end
+
+    -- Step 3: stash pop
+    if did_stash then
+      local _, pop_exit = git_sync(dir, "stash pop")
+      if pop_exit ~= 0 then
+        notify_error("stash conflict in " .. dir .. " — check :GitAutoBackupLog")
+        return
+      end
+    end
+  end
+
+  -- Step 4: add all
+  git_sync(dir, "add -A")
+
+  -- Step 5: check for changes
+  local status_out, _ = git_sync(dir, "status --porcelain")
+  if not status_out or status_out == "" then
+    return -- nothing to commit
+  end
+
+  -- Step 6: commit
+  local commit_msg = make_commit_message()
+  local _, commit_exit = git_sync(dir, "commit -m " .. vim.fn.shellescape(commit_msg))
+  if commit_exit ~= 0 then
+    notify_error("commit failed in " .. dir .. " — check :GitAutoBackupLog")
+    return
+  end
+
+  state.last_sync[dir] = os.date("%Y-%m-%dT%H:%M:%S%z")
+
+  -- Step 7: push
+  if config.push then
+    local _, push_exit = git_sync(dir, "push")
+    if push_exit ~= 0 then
+      notify_error("push failed in " .. dir .. " — check :GitAutoBackupLog")
+    end
+  end
+end
+
 function M.setup(opts)
   opts = opts or {}
   config = vim.tbl_deep_extend("force", {}, defaults, opts)
