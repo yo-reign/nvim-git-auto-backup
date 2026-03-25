@@ -23,8 +23,13 @@ local state = {
 
 local LOG_MAX = 200
 
+local function scrub_credentials(str)
+  -- Strip URLs with embedded credentials (e.g., https://token@github.com/...)
+  return (str:gsub("(https?://)([^@%s]+)@", "%1***@"))
+end
+
 local function log(msg)
-  table.insert(state.log_buffer, os.date("%H:%M:%S") .. " " .. msg)
+  table.insert(state.log_buffer, os.date("%H:%M:%S") .. " " .. scrub_credentials(msg))
   if #state.log_buffer > LOG_MAX then
     table.remove(state.log_buffer, 1)
   end
@@ -261,13 +266,14 @@ local function sync_dir_async(dir, on_complete)
       return
     end
     git_async(dir, {"stash", "pop"}, function(_, exit_code)
-      did_stash = false
-      state.did_stash[dir] = false
       if exit_code ~= 0 then
+        -- Leave did_stash true so VimLeavePre can attempt recovery
         notify_error("stash conflict in " .. dir .. " — check :GitAutoBackupLog")
         if on_complete then on_complete() end
         return
       end
+      did_stash = false
+      state.did_stash[dir] = false
       step_check_and_commit()
     end)
   end
@@ -285,10 +291,15 @@ local function sync_dir_async(dir, on_complete)
           git_async(dir, {"stash", "pop"}, function(_, pop_exit)
             if pop_exit ~= 0 then
               notify_error("stash pop after pull failure failed in " .. dir .. " — check :GitAutoBackupLog")
+            else
+              did_stash = false
+              state.did_stash[dir] = false
             end
+            if on_complete then on_complete() end
           end)
+        else
+          if on_complete then on_complete() end
         end
-        if on_complete then on_complete() end
         return
       end
       step_stash_pop()
@@ -309,6 +320,7 @@ local function sync_dir_async(dir, on_complete)
           return
         end
         did_stash = true
+        state.did_stash[dir] = true
         step_pull()
       end)
     end)
@@ -351,12 +363,18 @@ function M.setup(opts)
   end
   config.dirs = validate_dirs(config.dirs)
 
-  -- Stop existing timer if re-calling setup
+  -- Reset state for re-setup safety
   if state.timer then
     state.timer:stop()
     state.timer:close()
     state.timer = nil
   end
+  state.is_running = false
+  state.should_abort = false
+  state.did_stash = {}
+
+  -- Enforce minimum interval of 1 minute
+  config.interval = math.max(1, config.interval)
 
   -- Start timer
   if config.enabled and #config.dirs > 0 then
@@ -463,6 +481,10 @@ function M.toggle()
       state.timer:stop()
       state.timer:close()
       state.timer = nil
+    end
+    -- Signal in-flight cycle to stop
+    if state.is_running then
+      state.should_abort = true
     end
   end
 end
