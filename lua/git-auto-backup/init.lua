@@ -282,7 +282,11 @@ local function sync_dir_async(dir, on_complete)
       if exit_code ~= 0 then
         notify_error("conflict in " .. dir .. " — check :GitAutoBackupLog")
         if did_stash then
-          git_async(dir, {"stash", "pop"}, function() end)
+          git_async(dir, {"stash", "pop"}, function(_, pop_exit)
+            if pop_exit ~= 0 then
+              notify_error("stash pop after pull failure failed in " .. dir .. " — check :GitAutoBackupLog")
+            end
+          end)
         end
         if on_complete then on_complete() end
         return
@@ -375,10 +379,11 @@ function M.setup(opts)
         if config.pull and config.pull_on_open then
           -- Full cycle with pull
           M.run_cycle_async()
-        elseif #config.dirs > 0 then
-          -- pull disabled or pull_on_open disabled: just commit/push
+        elseif not config.pull and #config.dirs > 0 then
+          -- pull disabled: just commit/push (steps 4-7)
           M.run_cycle_async()
         end
+        -- pull=true but pull_on_open=false: do nothing on VimEnter
       end)
     end,
   })

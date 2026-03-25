@@ -12,14 +12,25 @@ vim.api.nvim_create_user_command("GitAutoBackupLog", function()
   local gab = require("git-auto-backup")
   local lines = gab.get_log_lines()
 
-  vim.cmd("new")
-  local buf = vim.api.nvim_get_current_buf()
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].swapfile = false
-  vim.api.nvim_buf_set_name(buf, "git-auto-backup://log")
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, #lines > 0 and lines or { "(empty)" })
-  vim.bo[buf].modifiable = false
+  -- Reuse existing log buffer if open, otherwise create new
+  local buf_name = "git-auto-backup://log"
+  local existing_buf = vim.fn.bufnr(buf_name)
+  if existing_buf ~= -1 and vim.api.nvim_buf_is_valid(existing_buf) then
+    -- Switch to existing buffer
+    vim.cmd("sbuffer " .. existing_buf)
+    vim.bo[existing_buf].modifiable = true
+    vim.api.nvim_buf_set_lines(existing_buf, 0, -1, false, #lines > 0 and lines or { "(empty)" })
+    vim.bo[existing_buf].modifiable = false
+  else
+    vim.cmd("new")
+    local buf = vim.api.nvim_get_current_buf()
+    vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].bufhidden = "wipe"
+    vim.bo[buf].swapfile = false
+    pcall(vim.api.nvim_buf_set_name, buf, buf_name)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, #lines > 0 and lines or { "(empty)" })
+    vim.bo[buf].modifiable = false
+  end
 end, { desc = "Show git-auto-backup log" })
 
 vim.api.nvim_create_user_command("GitAutoBackupNow", function()
