@@ -1,4 +1,4 @@
-local gab = require("git-auto-backup")
+local gab
 
 describe("git-auto-backup config", function()
   before_each(function()
@@ -44,17 +44,23 @@ describe("git-auto-backup config", function()
 
   it("expands tilde in dir paths", function()
     local home = vim.fn.expand("~")
-    local tmpdir = vim.fn.tempname()
+    local tmpdir = home .. "/.cache/git-auto-backup-test-" .. tostring(os.time())
     vim.fn.mkdir(tmpdir, "p")
-    vim.fn.system("git -C " .. vim.fn.shellescape(tmpdir) .. " init")
-    vim.fn.system("git -C " .. vim.fn.shellescape(tmpdir) .. " config user.email 'test@test.com'")
-    vim.fn.system("git -C " .. vim.fn.shellescape(tmpdir) .. " config user.name 'Test'")
-    vim.fn.system("git -C " .. vim.fn.shellescape(tmpdir) .. " commit --allow-empty -m 'init'")
 
-    local tilde_path = tmpdir:gsub("^" .. vim.pesc(home), "~")
-    gab.setup({ dirs = { tilde_path } })
-    local config = gab.get_config()
-    assert.equals(tmpdir, config.dirs[1])
+    local ok, err = pcall(function()
+      vim.fn.system({ "git", "-C", tmpdir, "init" })
+      vim.fn.system({ "git", "-C", tmpdir, "config", "user.email", "test@test.com" })
+      vim.fn.system({ "git", "-C", tmpdir, "config", "user.name", "Test" })
+      vim.fn.system({ "git", "-C", tmpdir, "commit", "--allow-empty", "-m", "init" })
+
+      local tilde_path = tmpdir:gsub("^" .. vim.pesc(home), "~")
+      assert.not_equals(tmpdir, tilde_path, "tilde substitution must fire")
+      gab.setup({ dirs = { tilde_path } })
+      local config = gab.get_config()
+      assert.equals(tmpdir, config.dirs[1])
+    end)
+
     vim.fn.delete(tmpdir, "rf")
+    if not ok then error(err) end
   end)
 end)

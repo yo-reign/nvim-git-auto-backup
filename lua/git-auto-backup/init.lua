@@ -45,7 +45,9 @@ local function notify_warn(msg)
 end
 
 local function expand_dir(dir)
-  return vim.fn.expand(dir)
+  local expanded = vim.fn.fnamemodify(dir, ":p")
+  -- fnamemodify :p appends trailing / for directories; strip it for consistency
+  return (expanded:gsub("/$", ""))
 end
 
 local function validate_dirs(dirs)
@@ -54,7 +56,7 @@ local function validate_dirs(dirs)
     if vim.fn.isdirectory(dir) == 0 then
       notify_warn(dir .. " does not exist, skipping")
     else
-      local result = vim.fn.system("git -C " .. vim.fn.shellescape(dir) .. " rev-parse --git-dir 2>/dev/null")
+      vim.fn.system({ "git", "-C", dir, "rev-parse", "--git-dir" })
       if vim.v.shell_error ~= 0 then
         notify_warn(dir .. " is not a git repo, skipping")
       else
