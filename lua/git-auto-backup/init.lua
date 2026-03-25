@@ -156,6 +156,186 @@ function M.sync_dir_sync(dir, include_pull)
   state.last_sync[dir] = os.date("%Y-%m-%dT%H:%M:%S%z")
 end
 
+local function git_async(dir, args, callback)
+  local full_cmd = vim.list_extend({ "git", "-C", dir }, args)
+  local stdout_chunks = {}
+  local stderr_chunks = {}
+
+  vim.fn.jobstart(full_cmd, {
+    stdout_buffered = true,
+    stderr_buffered = true,
+    on_stdout = function(_, data)
+      if data then
+        for _, line in ipairs(data) do
+          if line ~= "" then table.insert(stdout_chunks, line) end
+        end
+      end
+    end,
+    on_stderr = function(_, data)
+      if data then
+        for _, line in ipairs(data) do
+          if line ~= "" then table.insert(stderr_chunks, line) end
+        end
+      end
+    end,
+    on_exit = function(_, exit_code)
+      local output = table.concat(stdout_chunks, "\n")
+      local err_output = table.concat(stderr_chunks, "\n")
+      log(dir .. " $ git " .. table.concat(args, " ") .. " -> exit " .. exit_code)
+      if output ~= "" then log(output) end
+      if err_output ~= "" then log(err_output) end
+      if callback then
+        callback(output, exit_code)
+      end
+    end,
+  })
+end
+
+local function sync_dir_async(dir, on_complete)
+  if state.should_abort then
+    if on_complete then on_complete() end
+    return
+  end
+
+  local did_stash = false
+
+  local function step_push()
+    if state.should_abort then if on_complete then on_complete() end return end
+    if not config.push then
+      if on_complete then on_complete() end
+      return
+    end
+    git_async(dir, {"push"}, function(_, exit_code)
+      if exit_code ~= 0 then
+        notify_error("push failed in " .. dir .. " — check :GitAutoBackupLog")
+        if on_complete then on_complete() end
+        return
+      end
+      state.last_sync[dir] = os.date("%Y-%m-%dT%H:%M:%S%z")
+      if on_complete then on_complete() end
+    end)
+  end
+
+  local function step_commit()
+    if state.should_abort then if on_complete then on_complete() end return end
+    local commit_msg = make_commit_message()
+    git_async(dir, {"commit", "-m", commit_msg}, function(_, exit_code)
+      if exit_code ~= 0 then
+        notify_error("commit failed in " .. dir .. " — check :GitAutoBackupLog")
+        if on_complete then on_complete() end
+        return
+      end
+      if not config.push then
+        state.last_sync[dir] = os.date("%Y-%m-%dT%H:%M:%S%z")
+      end
+      step_push()
+    end)
+  end
+
+  local function step_check_and_commit()
+    if state.should_abort then if on_complete then on_complete() end return end
+    git_async(dir, {"add", "-A"}, function(_, add_exit)
+      if add_exit ~= 0 then
+        notify_error("git add failed in " .. dir .. " — check :GitAutoBackupLog")
+        if on_complete then on_complete() end
+        return
+      end
+      git_async(dir, {"status", "--porcelain"}, function(output, _)
+        if not output or output == "" then
+          if on_complete then on_complete() end
+          return
+        end
+        step_commit()
+      end)
+    end)
+  end
+
+  local function step_stash_pop()
+    if state.should_abort then
+      state.did_stash[dir] = did_stash
+      if on_complete then on_complete() end
+      return
+    end
+    if not did_stash then
+      step_check_and_commit()
+      return
+    end
+    git_async(dir, {"stash", "pop"}, function(_, exit_code)
+      did_stash = false
+      state.did_stash[dir] = false
+      if exit_code ~= 0 then
+        notify_error("stash conflict in " .. dir .. " — check :GitAutoBackupLog")
+        if on_complete then on_complete() end
+        return
+      end
+      step_check_and_commit()
+    end)
+  end
+
+  local function step_pull()
+    if state.should_abort then
+      state.did_stash[dir] = did_stash
+      if on_complete then on_complete() end
+      return
+    end
+    git_async(dir, {"pull", "--rebase"}, function(_, exit_code)
+      if exit_code ~= 0 then
+        notify_error("conflict in " .. dir .. " — check :GitAutoBackupLog")
+        if did_stash then
+          git_async(dir, {"stash", "pop"}, function() end)
+        end
+        if on_complete then on_complete() end
+        return
+      end
+      step_stash_pop()
+    end)
+  end
+
+  local function step_stash()
+    if state.should_abort then if on_complete then on_complete() end return end
+    git_async(dir, {"status", "--porcelain"}, function(output, _)
+      if not output or output == "" then
+        step_pull()
+        return
+      end
+      git_async(dir, {"stash", "-u"}, function(_, exit_code)
+        if exit_code ~= 0 then
+          notify_error("stash failed in " .. dir .. " — check :GitAutoBackupLog")
+          if on_complete then on_complete() end
+          return
+        end
+        did_stash = true
+        step_pull()
+      end)
+    end)
+  end
+
+  -- Entry point: decide whether to include pull steps
+  if config.pull then
+    step_stash()
+  else
+    step_check_and_commit()
+  end
+end
+
+function M.run_cycle_async()
+  if state.is_running then return end
+  if #config.dirs == 0 then return end
+  state.is_running = true
+  state.should_abort = false
+
+  local idx = 0
+  local function next_dir()
+    idx = idx + 1
+    if idx > #config.dirs or state.should_abort then
+      state.is_running = false
+      return
+    end
+    sync_dir_async(config.dirs[idx], next_dir)
+  end
+  next_dir()
+end
+
 function M.setup(opts)
   opts = opts or {}
   config = vim.tbl_deep_extend("force", {}, defaults, opts)
