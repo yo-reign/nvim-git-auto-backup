@@ -55,7 +55,7 @@ describe("git-auto-backup sync cycle", function()
     write_file(repo, "test.md", "hello")
     gab.sync_dir_sync(repo)
     local log = vim.fn.system("git -C " .. vim.fn.shellescape(repo) .. " log -1 --format=%s")
-    assert.truthy(log:match("^auto%-backup: %d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d"))
+    assert.truthy(log:match("^auto%-backup: %d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d[+-]%d%d%d%d"))
   end)
 
   it("handles custom commit prefix", function()

@@ -96,9 +96,11 @@ function M.sync_dir_sync(dir, include_pull)
     if status_out and status_out ~= "" then
       -- Step 1: stash (including untracked files)
       local _, stash_exit = git_sync(dir, "stash -u")
-      if stash_exit == 0 then
-        did_stash = true
+      if stash_exit ~= 0 then
+        notify_error("stash failed in " .. dir .. " — check :GitAutoBackupLog")
+        return
       end
+      did_stash = true
     end
 
     -- Step 2: pull
@@ -138,15 +140,16 @@ function M.sync_dir_sync(dir, include_pull)
     return
   end
 
-  state.last_sync[dir] = os.date("%Y-%m-%dT%H:%M:%S%z")
-
   -- Step 7: push
   if config.push then
     local _, push_exit = git_sync(dir, "push")
     if push_exit ~= 0 then
       notify_error("push failed in " .. dir .. " — check :GitAutoBackupLog")
+      return
     end
   end
+
+  state.last_sync[dir] = os.date("%Y-%m-%dT%H:%M:%S%z")
 end
 
 function M.setup(opts)
