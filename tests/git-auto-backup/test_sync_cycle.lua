@@ -66,3 +66,58 @@ describe("git-auto-backup sync cycle", function()
     assert.truthy(log:match("^notes%-sync:"))
   end)
 end)
+
+describe("git-auto-backup pull cycle", function()
+  local origin, local_repo
+
+  before_each(function()
+    package.loaded["git-auto-backup"] = nil
+    gab = require("git-auto-backup")
+
+    -- Create a bare origin repo
+    origin = vim.fn.tempname()
+    vim.fn.mkdir(origin, "p")
+    vim.fn.system("git -C " .. vim.fn.shellescape(origin) .. " init --bare")
+
+    -- Clone it to get a working repo
+    local_repo = vim.fn.tempname()
+    vim.fn.system("git clone " .. vim.fn.shellescape(origin) .. " " .. vim.fn.shellescape(local_repo))
+    vim.fn.system("git -C " .. vim.fn.shellescape(local_repo) .. " config user.email 'test@test.com'")
+    vim.fn.system("git -C " .. vim.fn.shellescape(local_repo) .. " config user.name 'Test'")
+    vim.fn.system("git -C " .. vim.fn.shellescape(local_repo) .. " commit --allow-empty -m 'init'")
+    vim.fn.system("git -C " .. vim.fn.shellescape(local_repo) .. " push")
+  end)
+
+  after_each(function()
+    vim.fn.delete(origin, "rf")
+    vim.fn.delete(local_repo, "rf")
+  end)
+
+  it("pull + commit + push works end-to-end", function()
+    gab.setup({ dirs = { local_repo }, pull = true, push = true, enabled = false })
+    write_file(local_repo, "note.md", "my note")
+
+    gab.sync_dir_sync(local_repo, true)
+
+    -- Verify pushed to origin
+    local log = vim.fn.system("git -C " .. vim.fn.shellescape(origin) .. " log --oneline")
+    assert.truthy(log:match("auto%-backup:"))
+  end)
+
+  it("stashes local changes during pull", function()
+    gab.setup({ dirs = { local_repo }, pull = true, push = true, enabled = false })
+
+    -- Create a committed file, then modify it (uncommitted change)
+    write_file(local_repo, "existing.md", "original")
+    vim.fn.system("git -C " .. vim.fn.shellescape(local_repo) .. " add -A")
+    vim.fn.system("git -C " .. vim.fn.shellescape(local_repo) .. " commit -m 'add existing'")
+    vim.fn.system("git -C " .. vim.fn.shellescape(local_repo) .. " push")
+    write_file(local_repo, "existing.md", "modified locally")
+
+    gab.sync_dir_sync(local_repo, true)
+
+    -- The modified content should be committed
+    local content = vim.fn.system("git -C " .. vim.fn.shellescape(local_repo) .. " show HEAD:existing.md")
+    assert.equals("modified locally", content)
+  end)
+end)
