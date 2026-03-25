@@ -12,7 +12,7 @@ end
 
 local function write_file(dir, name, content)
   local path = dir .. "/" .. name
-  local f = io.open(path, "w")
+  local f = assert(io.open(path, "w"))
   f:write(content)
   f:close()
 end

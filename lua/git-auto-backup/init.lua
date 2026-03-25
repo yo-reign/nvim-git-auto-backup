@@ -67,11 +67,11 @@ local function validate_dirs(dirs)
   return valid
 end
 
-local function git_sync(dir, cmd)
-  local full_cmd = "git -C " .. vim.fn.shellescape(dir) .. " " .. cmd
+local function git_sync(dir, args)
+  local full_cmd = vim.list_extend({ "git", "-C", dir }, args)
   local output = vim.fn.system(full_cmd)
   local exit_code = vim.v.shell_error
-  log(dir .. " $ " .. cmd .. " -> exit " .. exit_code)
+  log(dir .. " $ git " .. table.concat(args, " ") .. " -> exit " .. exit_code)
   if output and output ~= "" then
     log(output)
   end
@@ -92,10 +92,10 @@ function M.sync_dir_sync(dir, include_pull)
 
   if include_pull and config.pull then
     -- Check for uncommitted changes (including untracked)
-    local status_out, _ = git_sync(dir, "status --porcelain")
+    local status_out, _ = git_sync(dir, {"status", "--porcelain"})
     if status_out and status_out ~= "" then
       -- Step 1: stash (including untracked files)
-      local _, stash_exit = git_sync(dir, "stash -u")
+      local _, stash_exit = git_sync(dir, {"stash", "-u"})
       if stash_exit ~= 0 then
         notify_error("stash failed in " .. dir .. " — check :GitAutoBackupLog")
         return
@@ -104,18 +104,18 @@ function M.sync_dir_sync(dir, include_pull)
     end
 
     -- Step 2: pull
-    local _, pull_exit = git_sync(dir, "pull --rebase")
+    local _, pull_exit = git_sync(dir, {"pull", "--rebase"})
     if pull_exit ~= 0 then
       notify_error("conflict in " .. dir .. " — check :GitAutoBackupLog")
       if did_stash then
-        git_sync(dir, "stash pop")
+        git_sync(dir, {"stash", "pop"})
       end
       return
     end
 
     -- Step 3: stash pop
     if did_stash then
-      local _, pop_exit = git_sync(dir, "stash pop")
+      local _, pop_exit = git_sync(dir, {"stash", "pop"})
       if pop_exit ~= 0 then
         notify_error("stash conflict in " .. dir .. " — check :GitAutoBackupLog")
         return
@@ -124,17 +124,21 @@ function M.sync_dir_sync(dir, include_pull)
   end
 
   -- Step 4: add all
-  git_sync(dir, "add -A")
+  local _, add_exit = git_sync(dir, {"add", "-A"})
+  if add_exit ~= 0 then
+    notify_error("git add failed in " .. dir .. " — check :GitAutoBackupLog")
+    return
+  end
 
   -- Step 5: check for changes
-  local status_out, _ = git_sync(dir, "status --porcelain")
-  if not status_out or status_out == "" then
+  local post_add_status, _ = git_sync(dir, {"status", "--porcelain"})
+  if not post_add_status or post_add_status == "" then
     return -- nothing to commit
   end
 
   -- Step 6: commit
   local commit_msg = make_commit_message()
-  local _, commit_exit = git_sync(dir, "commit -m " .. vim.fn.shellescape(commit_msg))
+  local _, commit_exit = git_sync(dir, {"commit", "-m", commit_msg})
   if commit_exit ~= 0 then
     notify_error("commit failed in " .. dir .. " — check :GitAutoBackupLog")
     return
@@ -142,7 +146,7 @@ function M.sync_dir_sync(dir, include_pull)
 
   -- Step 7: push
   if config.push then
-    local _, push_exit = git_sync(dir, "push")
+    local _, push_exit = git_sync(dir, {"push"})
     if push_exit ~= 0 then
       notify_error("push failed in " .. dir .. " — check :GitAutoBackupLog")
       return
