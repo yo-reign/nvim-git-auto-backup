@@ -347,6 +347,73 @@ function M.setup(opts)
   end
   config.dirs = validate_dirs(config.dirs)
 
+  -- Stop existing timer if re-calling setup
+  if state.timer then
+    state.timer:stop()
+    state.timer:close()
+    state.timer = nil
+  end
+
+  -- Start timer
+  if config.enabled and #config.dirs > 0 then
+    state.timer = vim.uv.new_timer()
+    local interval_ms = config.interval * 60 * 1000
+    -- Initial delay = interval (avoids double-sync with VimEnter pull)
+    state.timer:start(interval_ms, interval_ms, vim.schedule_wrap(function()
+      M.run_cycle_async()
+    end))
+  end
+
+  -- Create augroup, clearing any previous autocmds
+  local augroup = vim.api.nvim_create_augroup("GitAutoBackup", { clear = true })
+
+  -- VimEnter: sync on open
+  vim.api.nvim_create_autocmd("VimEnter", {
+    group = augroup,
+    callback = function()
+      vim.schedule(function()
+        if config.pull and config.pull_on_open then
+          -- Full cycle with pull
+          M.run_cycle_async()
+        elseif #config.dirs > 0 then
+          -- pull disabled or pull_on_open disabled: just commit/push
+          M.run_cycle_async()
+        end
+      end)
+    end,
+  })
+
+  -- VimLeavePre: synchronous exit cycle
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = augroup,
+    callback = function()
+      -- Abort any in-flight async cycle
+      if state.is_running then
+        state.should_abort = true
+      end
+
+      -- Pop any dangling stash from aborted async cycle
+      for _, dir in ipairs(config.dirs) do
+        if state.did_stash[dir] then
+          vim.fn.system({ "git", "-C", dir, "stash", "pop" })
+          state.did_stash[dir] = false
+        end
+      end
+
+      -- Run synchronous exit cycle (steps 4-7, no pull) for all dirs
+      for _, dir in ipairs(config.dirs) do
+        M.sync_dir_sync(dir, false)
+      end
+
+      -- Stop timer
+      if state.timer then
+        state.timer:stop()
+        state.timer:close()
+        state.timer = nil
+      end
+    end,
+  })
+
   state.setup_done = true
 end
 
