@@ -17,7 +17,7 @@ lazy.nvim:
 
 ```lua
 {
-  "reign/git-auto-backup",
+  "yo-reign/nvim-git-auto-backup",
   opts = {
     dirs = {
       "~/notes/zettelkasten",
